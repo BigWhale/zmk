@@ -20,6 +20,11 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/events/endpoint_changed.h>
 #include <zmk/events/wpm_state_changed.h>
 #include <zmk/events/layer_state_changed.h>
+#if IS_ENABLED(CONFIG_NICE_VIEW_WIDGET_CAPS_LOCK)
+#include <zmk/hid_indicators.h>
+#include <zmk/events/hid_indicators_changed.h>
+#include <dt-bindings/zmk/hid_indicators.h>
+#endif
 #include <zmk/usb.h>
 #include <zmk/ble.h>
 #include <zmk/endpoints.h>
@@ -88,7 +93,29 @@ static void draw_top(lv_obj_t *widget, const struct status_state *state) {
 
     canvas_draw_text(canvas, 0, 0, CANVAS_SIZE, &label_dsc, output_text);
 
-    // Draw WPM
+#if IS_ENABLED(CONFIG_NICE_VIEW_WIDGET_CAPS_LOCK)
+    // Draw CAPS lock indicator
+    lv_draw_label_dsc_t label_dsc_caps;
+    if (state->caps_lock) {
+        // ON: filled white rect, black text
+        canvas_draw_rect(canvas, 0, 21, 68, 20, &rect_white_dsc);
+        init_label_dsc(&label_dsc_caps, LVGL_BACKGROUND, &lv_font_unscii_8, LV_TEXT_ALIGN_CENTER);
+    } else {
+        // OFF: white outline, black fill, white text
+        canvas_draw_rect(canvas, 0, 21, 68, 20, &rect_white_dsc);
+        canvas_draw_rect(canvas, 1, 22, 66, 18, &rect_black_dsc);
+        init_label_dsc(&label_dsc_caps, LVGL_FOREGROUND, &lv_font_unscii_8, LV_TEXT_ALIGN_CENTER);
+    }
+    canvas_draw_text(canvas, 0, 27, 68, &label_dsc_caps, "CAPS");
+
+    // Draw CPS number centered below
+    lv_draw_label_dsc_t label_dsc_cps;
+    init_label_dsc(&label_dsc_cps, LVGL_FOREGROUND, &lv_font_montserrat_16, LV_TEXT_ALIGN_CENTER);
+    char wpm_text[6] = {};
+    snprintf(wpm_text, sizeof(wpm_text), "%d", state->wpm[9]);
+    canvas_draw_text(canvas, 0, 44, 68, &label_dsc_cps, wpm_text);
+#else
+    // Draw WPM graph
     canvas_draw_rect(canvas, 0, 21, 68, 42, &rect_white_dsc);
     canvas_draw_rect(canvas, 1, 22, 66, 40, &rect_black_dsc);
 
@@ -119,6 +146,7 @@ static void draw_top(lv_obj_t *widget, const struct status_state *state) {
         points[i].y = 60 - (state->wpm[i] - min) * 36 / range;
     }
     canvas_draw_line(canvas, points, 10, &line_dsc);
+#endif
 
     // Rotate canvas
     rotate_canvas(canvas);
@@ -329,6 +357,41 @@ ZMK_DISPLAY_WIDGET_LISTENER(widget_wpm_status, struct wpm_status_state, wpm_stat
                             wpm_status_get_state)
 ZMK_SUBSCRIPTION(widget_wpm_status, zmk_wpm_state_changed);
 
+#if IS_ENABLED(CONFIG_NICE_VIEW_WIDGET_CAPS_LOCK)
+
+struct hid_indicators_state {
+    bool caps_lock;
+};
+
+static void set_hid_indicators_status(struct zmk_widget_status *widget,
+                                      struct hid_indicators_state state) {
+    widget->state.caps_lock = state.caps_lock;
+    draw_top(widget->obj, &widget->state);
+}
+
+static void hid_indicators_update_cb(struct hid_indicators_state state) {
+    struct zmk_widget_status *widget;
+    SYS_SLIST_FOR_EACH_CONTAINER(&widgets, widget, node) {
+        set_hid_indicators_status(widget, state);
+    }
+}
+
+static struct hid_indicators_state hid_indicators_get_state(const zmk_event_t *eh) {
+    const struct zmk_hid_indicators_changed *ev = as_zmk_hid_indicators_changed(eh);
+    zmk_hid_indicators_t indicators =
+        (ev != NULL) ? ev->indicators : zmk_hid_indicators_get_current_profile();
+
+    return (struct hid_indicators_state){
+        .caps_lock = (indicators & HID_INDICATOR_CAPS_LOCK) != 0,
+    };
+}
+
+ZMK_DISPLAY_WIDGET_LISTENER(widget_hid_indicators_status, struct hid_indicators_state,
+                            hid_indicators_update_cb, hid_indicators_get_state)
+ZMK_SUBSCRIPTION(widget_hid_indicators_status, zmk_hid_indicators_changed);
+
+#endif // CONFIG_NICE_VIEW_WIDGET_CAPS_LOCK
+
 int zmk_widget_status_init(struct zmk_widget_status *widget, lv_obj_t *parent) {
     widget->obj = lv_obj_create(parent);
     lv_obj_set_size(widget->obj, 160, 68);
@@ -347,6 +410,9 @@ int zmk_widget_status_init(struct zmk_widget_status *widget, lv_obj_t *parent) {
     widget_output_status_init();
     widget_layer_status_init();
     widget_wpm_status_init();
+#if IS_ENABLED(CONFIG_NICE_VIEW_WIDGET_CAPS_LOCK)
+    widget_hid_indicators_status_init();
+#endif
 
     return 0;
 }
